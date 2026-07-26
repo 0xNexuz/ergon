@@ -1,0 +1,13 @@
+.next
+dist
+work
+outputs
+examples
+tests
+db
+worker
+drizzle
+build
+*.tsbuildinfo
+.wrangler
+.git
