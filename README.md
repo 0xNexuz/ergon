@@ -1,98 +1,127 @@
-# vinext-starter
+﻿# Ergon
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+**Post the outcome. Prove the work. Release the pay.**
 
-## Prerequisites
+Ergon is a mobile-first Nimiq Pay Mini App for small, outcome-based tasks. A requester defines a result, its acceptance evidence, and a NIM reward. A worker claims the task and submits proof. Once the requester approves that proof, Ergon creates a signed completion receipt and sends the agreed NIM payment.
 
-- Node.js `>=22.13.0`
+[Open the live app](https://ergonapp.vercel.app)
 
-## Quick Start
+## Why Ergon
+
+Small online jobs are often too lightweight for traditional freelance marketplaces, yet too risky for an informal direct payment. Existing platforms introduce proposals, long profiles, platform custody, and slow settlement.
+
+Ergon reduces the exchange to one verifiable flow:
+
+1. **Define** — describe the outcome, evidence, reward, and recipient.
+2. **Do** — a worker completes the task and submits a proof link.
+3. **Verify** — the requester reviews the evidence.
+4. **Settle** — the requester signs a proof receipt and approves the NIM transaction in Nimiq Pay.
+
+This combines the immediacy of a microtask board, the confidence of proof-based settlement, and the simplicity of a native wallet experience.
+
+## Current MVP
+
+- Mobile-first, responsive task and settlement experience
+- Nimiq Pay Mini App SDK initialization
+- Native account discovery with `listAccounts()`
+- Cryptographic proof-receipt signing with `sign()`
+- Current-chain-height lookup with `getBlockNumber()`
+- Direct NIM settlement with `sendBasicTransactionWithData()`
+- NIM-to-Luna conversion and recipient/amount validation
+- Transaction metadata linking payment to the Ergon receipt
+- Explicit wallet approval and escrow-scope disclosures
+- Graceful fallback when opened outside the Nimiq Pay container
+
+The current competition build performs a direct NIM payment after proof approval. Funds are never represented as contract-custodied escrow. Programmable EVM/USDT escrow is a clearly separated future path.
+
+## Nimiq Transaction Flow
+
+```text
+Connect Nimiq Pay
+      |
+Discover account
+      |
+Create proof receipt
+      |
+User signs receipt
+      |
+Read block height
+      |
+User approves NIM transfer
+      |
+Return transaction hash
+```
+
+Every signature and payment requires confirmation in the user's Nimiq Pay wallet.
+
+## Technology
+
+- Next.js 16 and React 19
+- TypeScript
+- [`@nimiq/mini-app-sdk`](https://www.npmjs.com/package/@nimiq/mini-app-sdk)
+- vinext/Vite for the Sites-compatible build
+- Vercel for the public competition deployment
+
+## Local Development
+
+Requirements:
+
+- Node.js 22.13 or newer
+- npm
 
 ```bash
+git clone https://github.com/0xNexuz/ergon.git
+cd ergon
 npm install
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+Then open the local URL shown in the terminal. Wallet operations require the Nimiq Pay Mini App container; outside it, the interface remains explorable and explains how to continue.
 
-## Included Shape
+## Quality Checks
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```bash
+npm run typecheck
+npm run lint
+npm test
+npx next build
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+`npm test` builds the vinext production output and verifies the server-rendered competition messaging, wallet actions, and payment disclosures.
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+## Project Structure
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+```text
+app/
+  ergon-app.tsx      Main product experience and Nimiq SDK flow
+  globals.css        Responsive visual system
+  layout.tsx         Metadata and social cards
+  page.tsx           App entry point
+public/
+  og.png             Ergon social preview
+tests/
+  rendered-html.test.mjs
+build/               Sites packaging support
+worker/              Sites runtime support
+```
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+## Competition Fit
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+Ergon is designed around the Nimiq Mini Apps judging criteria:
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+- **Design and UX:** recognizable visual identity, focused navigation, responsive mobile layout, and a sub-minute first-use flow
+- **Functionality:** real Nimiq account, signature, block-height, and transaction calls with validation and error states
+- **Usefulness and originality:** proof-first settlement for overlooked 5–30 minute outcomes
+- **Distribution:** linkable tasks, repeat requester/worker utility, and a wallet-native payment loop
 
-## Useful Commands
+## Security and Product Scope
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+- Ergon does not request or store private keys.
+- The wallet remains the authority for signatures and payments.
+- Transaction values are converted from NIM to Luna before SDK submission.
+- The MVP does not claim autonomous smart-contract escrow.
+- Users should verify the recipient, evidence, and amount before approving a payment.
 
-## Learn More
+## License
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+Released under the [MIT License](LICENSE).

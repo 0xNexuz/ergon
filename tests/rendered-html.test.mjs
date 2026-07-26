@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 
 async function render() {
@@ -17,7 +17,7 @@ test("server-renders the Ergon Mini App", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>Ergon — Work made verifiable<\/title>/i);
+  assert.match(html, /<title>Ergon - Work made verifiable<\/title>/i);
   assert.match(html, /WORK/);
   assert.match(html, /Post the outcome/);
   assert.match(html, /CONNECT NIMIQ/);
@@ -34,4 +34,3 @@ test("ships competition and payment disclosures", async () => {
   assert.match(html, /Wallet access and every payment require native user approval/);
   assert.match(html, /Contract escrow belongs to the future EVM and USDT path/);
 });
-
