@@ -4,20 +4,22 @@ import "./globals.css";
 
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 const mono = Geist_Mono({ variable: "--font-mono", subsets: ["latin"] });
+const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
 
 export const metadata: Metadata = {
-  title: "Ergon — Work made verifiable",
+  metadataBase: new URL(productionHost ? `https://${productionHost}` : "http://localhost:3000"),
+  title: "Ergon - Work made verifiable",
   description: "Post the outcome. Prove the work. Release the pay through Nimiq Pay.",
   applicationName: "Ergon",
   openGraph: {
-    title: "Ergon — Work made verifiable",
+    title: "Ergon - Work made verifiable",
     description: "Post the outcome. Prove the work. Release the pay.",
     type: "website",
-    images: [{ url: "/og.png", width: 1536, height: 1024, alt: "Ergon — Work on proof" }],
+    images: [{ url: "/og.png", width: 1536, height: 1024, alt: "Ergon - Work on proof" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Ergon — Work made verifiable",
+    title: "Ergon - Work made verifiable",
     description: "Post the outcome. Prove the work. Release the pay.",
     images: ["/og.png"],
   },
