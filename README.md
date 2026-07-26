@@ -1,4 +1,4 @@
-﻿# Ergon
+# Ergon
 
 **Post the outcome. Prove the work. Release the pay.**
 
@@ -22,6 +22,8 @@ This combines the immediacy of a microtask board, the confidence of proof-based 
 ## Current MVP
 
 - Mobile-first, responsive task and settlement experience
+- Fresh task publishing with immediate, device-persistent live-board updates
+- Written, URL, photo, PDF, and document proof packages
 - Nimiq Pay Mini App SDK initialization
 - Native account discovery with `listAccounts()`
 - Cryptographic proof-receipt signing with `sign()`
