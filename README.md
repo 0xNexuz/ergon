@@ -19,7 +19,7 @@ Ergon reduces the exchange to one verifiable flow:
 
 This combines the immediacy of a microtask board, the confidence of proof-based settlement, and the simplicity of a native wallet experience.
 
-## Current MVP
+## Current State
 
 - Mobile-first, responsive task and settlement experience
 - Fresh task publishing with immediate, device-persistent live-board updates
@@ -91,23 +91,10 @@ npx next build
 
 `npm test` builds the vinext production output and verifies the server-rendered competition messaging, wallet actions, and payment disclosures.
 
-## Project Structure
 
-```text
-app/
-  ergon-app.tsx      Main product experience and Nimiq SDK flow
-  globals.css        Responsive visual system
-  layout.tsx         Metadata and social cards
-  page.tsx           App entry point
-public/
-  og.png             Ergon social preview
-tests/
-  rendered-html.test.mjs
-build/               Sites packaging support
-worker/              Sites runtime support
 ```
 
-## Competition Fit
+## Ergon
 
 Ergon is designed around the Nimiq Mini Apps judging criteria:
 
