@@ -1,10 +1,4 @@
 {
   "framework": "nextjs",
-  "buildCommand": "npx next build",
-  "rewrites": [
-    {
-      "source": "/api/tasks",
-      "destination": "https://ergon-proof-work.elllbest7.chatgpt.site/api/tasks"
-    }
-  ]
+  "buildCommand": "npx next build"
 }
