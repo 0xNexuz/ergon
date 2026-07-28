@@ -3,9 +3,16 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { init, type ErrorResponse, type NimiqProvider } from "@nimiq/mini-app-sdk";
-
-type Tone = "orange" | "mint" | "cream" | "green";
-type LiveTask = { id: string; label: string; title: string; proof: string; reward: string; tone: Tone; posted?: boolean };
+import {
+  canSettleTask,
+  canSignProof,
+  canSubmitProof,
+  normalizeAddress,
+  taskRole,
+  taskStatus,
+  type LiveTask,
+  type Tone,
+} from "./task-state";
 
 const INITIAL_TASKS: LiveTask[] = [
   { id: "queue-check", label: "AROUND ME", title: "Check the queue at the main entrance", proof: "PHOTO + WAIT TIME", reward: "2 NIM", tone: "orange" },
@@ -33,6 +40,9 @@ function short(address: string) {
 function message(error: unknown) {
   return error instanceof Error ? error.message : "The wallet request could not be completed.";
 }
+function rewardAmount(task: LiveTask) {
+  return task.reward.match(/[\d.]+/)?.[0] || "";
+}
 function Brand() {
   return <span className="brand"><Image src="/ergon-mark.png" width={38} height={38} alt="" aria-hidden="true" />ERGON</span>;
 }
@@ -55,15 +65,16 @@ export default function ErgonApp() {
   const [proofText, setProofText] = useState("");
   const [proofUrl, setProofUrl] = useState("");
   const [proofFileName, setProofFileName] = useState("");
-  const [proofSubmitted, setProofSubmitted] = useState(false);
-  const [recipient, setRecipient] = useState("");
-  const [amount, setAmount] = useState("");
   const [payStatus, setPayStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [payNote, setPayNote] = useState("");
   const [txHash, setTxHash] = useState("");
   const [openFaq, setOpenFaq] = useState(0);
+  const amount = selectedTask ? rewardAmount(selectedTask) : "";
+  const recipient = selectedTask?.submission?.contributor || "";
   const luna = useMemo(() => Math.round((Number(amount) || 0) * 100_000), [amount]);
   const connected = walletStatus === "ready" && Boolean(address);
+  const selectedRole = selectedTask ? taskRole(selectedTask, address) : "disconnected";
+  const selectedStatus = selectedTask ? taskStatus(selectedTask) : "open";
 
   useEffect(() => {
     let restoreTimer = 0;
