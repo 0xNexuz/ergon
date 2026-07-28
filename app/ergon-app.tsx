@@ -180,35 +180,69 @@ export default function ErgonApp() {
 
   function submitProof(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!selectedTask) return;
+    if (!connected) {
+      setPayStatus("error");
+      setPayNote("Connect Nimiq Pay first. Your connected wallet will be recorded as the contributor.");
+      return;
+    }
+    if (!canSubmitProof(selectedTask, address)) {
+      setPayStatus("error");
+      setPayNote(selectedRole === "requester"
+        ? "You posted this task. A different contributor wallet must submit the work."
+        : "This task already has a contributor submission.");
+      return;
+    }
     if (!proofText.trim() && !proofUrl.trim() && !proofFileName) {
       setPayStatus("error");
       setPayNote("Add proof in words, paste a link, or attach a file.");
       return;
     }
-    setProofSubmitted(true);
+    updateTask(selectedTask.id, {
+      status: "proof-submitted",
+      submission: {
+        text: proofText.trim(),
+        url: proofUrl.trim(),
+        file: proofFileName,
+        contributor: normalizeAddress(address),
+        submittedAt: new Date().toISOString(),
+      },
+    });
     setPayStatus("success");
-    setPayNote("Proof package added. It is ready for requester review and settlement.");
+    setPayNote("Proof package added. Sign it to send it to the requester—this does not move any NIM.");
   }
 
   async function signProof() {
     if (!provider) return connect();
-    if (!proofSubmitted || !selectedTask) {
+    if (!selectedTask || !canSignProof(selectedTask, address) || !selectedTask.submission) {
       setPayStatus("error");
-      setPayNote("Submit the proof package before signing it.");
+      setPayNote("Only the contributor wallet that submitted this proof can sign it.");
       return;
     }
     setPayStatus("loading");
-    setPayNote("Review the proof receipt in Nimiq Pay…");
+    setPayNote("Review the proof receipt in Nimiq Pay. This is a signature, not a payment…");
     try {
       const result = await provider.sign(JSON.stringify({
-        app: "Ergon", action: "approve-proof", taskId: selectedTask.id, task: selectedTask.title,
+        app: "Ergon",
+        action: "submit-proof",
+        taskId: selectedTask.id,
+        task: selectedTask.title,
         proofRequirement: selectedTask.proof,
-        proof: { text: proofText.trim(), url: proofUrl.trim(), file: proofFileName },
-        recipient, amountLuna: luna, timestamp: new Date().toISOString(),
+        proof: {
+          text: selectedTask.submission.text,
+          url: selectedTask.submission.url,
+          file: selectedTask.submission.file,
+        },
+        contributor: normalizeAddress(address),
+        reward: selectedTask.reward,
+        timestamp: selectedTask.submission.submittedAt,
       }));
       if (isProviderError(result)) throw new Error(result.error.message);
-      setPayStatus("idle");
-      setPayNote(`Proof signed • ${result.signature.slice(0, 14)}…`);
+      updateTask(selectedTask.id, {
+        submission: { ...selectedTask.submission, signature: result.signature },
+      });
+      setPayStatus("success");
+      setPayNote(`Proof signed • ${result.signature.slice(0, 14)}… Awaiting requester approval. You will not be asked to pay.`);
     } catch (error) {
       setPayStatus("error");
       setPayNote(message(error));
@@ -218,31 +252,41 @@ export default function ErgonApp() {
   async function sendPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setTxHash("");
-    if (!proofSubmitted || !selectedTask) {
-      setPayStatus("error"); setPayNote("Submit the required proof before payment."); return;
+    if (!selectedTask || !canSettleTask(selectedTask, address)) {
+      setPayStatus("error");
+      setPayNote("Only the wallet that posted this task can approve and pay its signed contributor.");
+      return;
     }
     if (!provider || !connected) {
-      setPayStatus("error"); setPayNote("Connect Nimiq Pay first."); return;
+      setPayStatus("error");
+      setPayNote("Connect the requester wallet in Nimiq Pay first.");
+      return;
     }
     if (!/^NQ[0-9A-Z ]{30,44}$/.test(recipient.trim().toUpperCase())) {
-      setPayStatus("error"); setPayNote("Enter a valid Nimiq address beginning with NQ."); return;
+      setPayStatus("error");
+      setPayNote("The contributor wallet address is invalid.");
+      return;
     }
     if (luna < 1) {
-      setPayStatus("error"); setPayNote("Enter an amount greater than zero."); return;
+      setPayStatus("error");
+      setPayNote("The task reward must be greater than zero.");
+      return;
     }
     setPayStatus("loading");
-    setPayNote("Confirm the NIM transaction in Nimiq Pay…");
+    setPayNote("Requester: confirm the NIM payment to the contributor in Nimiq Pay…");
     try {
       const validityStartHeight = await provider.getBlockNumber();
       const result = await provider.sendBasicTransactionWithData({
-        recipient: recipient.trim().toUpperCase(), value: luna,
+        recipient: recipient.trim().toUpperCase(),
+        value: luna,
         data: `ERGON:${selectedTask.id.slice(0, 18)}:${selectedTask.title.slice(0, 28)}`,
         validityStartHeight,
       });
       if (isProviderError(result)) throw new Error(result.error.message);
+      updateTask(selectedTask.id, { status: "paid", txHash: result });
       setTxHash(result);
       setPayStatus("success");
-      setPayNote("Payment broadcast. The work is officially done.");
+      setPayNote("Payment broadcast by the requester. The contributor has been paid.");
     } catch (error) {
       setPayStatus("error");
       setPayNote(message(error));
