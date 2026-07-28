@@ -37,3 +37,19 @@
 .settlementTitle small{margin-top:2px;font-size:9px}
 .taskModal h2{max-width:500px;font-size:clamp(34px,6vw,52px)}
 @media(max-width:620px){.brand img{width:32px;height:32px}.taskUpdate{grid-template-columns:1fr auto}.taskUpdate b{grid-column:1/-1;width:max-content}.fieldPair{grid-template-columns:1fr}.requiredProof{align-items:flex-start;flex-direction:column}.requiredProof b{text-align:left}.taskModal{padding-top:48px}}
+.boardStatus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .65rem;
+  padding: .7rem 1rem;
+  font-size: .72rem;
+  letter-spacing: .08em;
+}
+.boardStatus b { font-weight: 950; }
+.boardStatus.live b { color: #16784b; }
+.boardStatus.loading b { color: #8b5a00; }
+.boardStatus.error { color: #9d2219; }
+@media (max-width: 620px) {
+  .boardStatus { align-items: flex-start; flex-direction: column; gap: .2rem; }
+}

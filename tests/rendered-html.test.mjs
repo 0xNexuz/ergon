@@ -22,7 +22,7 @@ test("server-renders the Ergon Mini App", async () => {
   assert.match(html, /Post the outcome/);
   assert.match(html, /CONNECT NIMIQ/);
   assert.match(html, /ergon-mark\.png/);
-  assert.match(html, /DO TASK &amp; ADD PROOF/);
+  assert.match(html, /USE AS A TASK TEMPLATE/);
   assert.match(html, /NATIVE NIM PAYMENTS/);
   assert.match(html, /Built for the Nimiq Mini Apps Competition/);
   assert.doesNotMatch(html, /codex-preview/);
@@ -43,6 +43,9 @@ test("supports fresh task posting and role-separated proof", async () => {
   );
   assert.match(source, /setCreateOutcome\(""\)/);
   assert.match(source, /PUBLISH TO LIVE TASKS/);
+  assert.match(source, /fetch\("\/api\/tasks"/);
+  assert.match(source, /SHARED LIVE BOARD/);
+  assert.doesNotMatch(source, /localStorage/);
   assert.match(source, /setLiveTasks/);
   assert.match(source, /PROOF NOTES/);
   assert.match(source, /type="file"/);

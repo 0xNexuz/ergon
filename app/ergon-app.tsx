@@ -29,7 +29,6 @@ const faqs = [
   ["What if a wallet request is rejected?", "Nothing is sent. Ergon preserves the task, explains what happened, and lets the user safely retry."],
 ];
 
-const STORAGE_KEY = "ergon-posted-tasks";
 
 function isProviderError(value: unknown): value is ErrorResponse {
   return Boolean(value && typeof value === "object" && "error" in value);
@@ -54,6 +53,8 @@ export default function ErgonApp() {
   const [walletNote, setWalletNote] = useState("");
   const [modalMode, setModalMode] = useState<"create" | "task" | null>(null);
   const [liveTasks, setLiveTasks] = useState<LiveTask[]>(INITIAL_TASKS);
+  const [boardStatus, setBoardStatus] = useState<"loading" | "live" | "error">("loading");
+  const [boardNote, setBoardNote] = useState("CONNECTING TO THE SHARED BOARD…");
   const [selectedTask, setSelectedTask] = useState<LiveTask | null>(null);
   const [taskUpdate, setTaskUpdate] = useState("");
   const [createOutcome, setCreateOutcome] = useState("");
@@ -77,33 +78,75 @@ export default function ErgonApp() {
   const selectedStatus = selectedTask ? taskStatus(selectedTask) : "open";
 
   useEffect(() => {
-    let restoreTimer = 0;
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]") as LiveTask[];
-      if (Array.isArray(saved) && saved.length) {
-        restoreTimer = window.setTimeout(() => setLiveTasks([...saved, ...INITIAL_TASKS]), 0);
+    let active = true;
+    let loadedOnce = false;
+    const knownTaskIds = new Set<string>();
+
+    async function refreshSharedTasks() {
+      try {
+        const response = await fetch("/api/tasks", { cache: "no-store" });
+        const data = await response.json() as { tasks?: LiveTask[]; error?: string };
+        if (!response.ok || !Array.isArray(data.tasks)) {
+          throw new Error(data.error || "The shared task board is unavailable.");
+        }
+        if (!active) return;
+
+        if (loadedOnce) {
+          const newest = data.tasks.find((task) => !knownTaskIds.has(task.id));
+          if (newest) setTaskUpdate(`“${newest.title}” was just posted · ${newest.reward}`);
+        }
+        knownTaskIds.clear();
+        data.tasks.forEach((task) => knownTaskIds.add(task.id));
+        loadedOnce = true;
+
+        setLiveTasks([...data.tasks, ...INITIAL_TASKS]);
+        setSelectedTask((current) => {
+          if (!current?.posted) return current;
+          return data.tasks?.find((task) => task.id === current.id) ?? current;
+        });
+        setBoardStatus("live");
+        setBoardNote("SHARED LIVE BOARD · SYNCED ACROSS DEVICES");
+      } catch (error) {
+        if (!active) return;
+        setBoardStatus("error");
+        setBoardNote(message(error));
       }
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
     }
-    return () => window.clearTimeout(restoreTimer);
+
+    void refreshSharedTasks();
+    const refreshTimer = window.setInterval(refreshSharedTasks, 5_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void refreshSharedTasks();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, []);
 
-  function savePostedTasks(tasks: LiveTask[]) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.filter((task) => task.posted).slice(0, 12)));
-    } catch {
-      // The role-safe flow still works for this session if storage is unavailable.
-    }
-  }
-
-  function updateTask(taskId: string, changes: Partial<LiveTask>) {
-    setLiveTasks((current) => {
-      const next = current.map((task) => task.id === taskId ? { ...task, ...changes } : task);
-      savePostedTasks(next);
-      return next;
+  async function mutateSharedTask(payload: Record<string, unknown>) {
+    const response = await fetch("/api/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
     });
-    setSelectedTask((current) => current?.id === taskId ? { ...current, ...changes } : current);
+    const data = await response.json() as { task?: LiveTask; error?: string };
+    if (!response.ok || !data.task) {
+      throw new Error(data.error || "The shared task board could not be updated.");
+    }
+    setLiveTasks((current) => {
+      const exists = current.some((task) => task.id === data.task?.id);
+      return exists
+        ? current.map((task) => task.id === data.task?.id ? data.task! : task)
+        : [data.task!, ...current];
+    });
+    setSelectedTask((current) => current?.id === data.task?.id ? data.task! : current);
+    setBoardStatus("live");
+    setBoardNote("SHARED LIVE BOARD · SYNCED ACROSS DEVICES");
+    return data.task;
   }
 
   async function connect() {
@@ -134,7 +177,7 @@ export default function ErgonApp() {
     setModalMode("create");
   }
 
-  function publishTask(event: FormEvent<HTMLFormElement>) {
+  async function publishTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!connected) {
       setCreateError("Connect Nimiq Pay first. The connected wallet becomes the requester and is the only wallet allowed to approve payment.");
@@ -145,26 +188,30 @@ export default function ErgonApp() {
       setCreateError("Add an outcome, a proof requirement, and a reward greater than zero.");
       return;
     }
-    const tones: Tone[] = ["orange", "mint", "cream", "green"];
-    const created: LiveTask = {
-      id: `posted-${Date.now()}`,
-      label: createCategory,
-      title: createOutcome.trim(),
-      proof: createProof.trim().toUpperCase(),
-      reward: `${reward} NIM`,
-      tone: tones[Math.floor(Math.random() * tones.length)],
-      posted: true,
-      requester: normalizeAddress(address),
-      status: "open",
-    };
-    setLiveTasks((current) => {
-      const next = [created, ...current];
-      savePostedTasks(next);
-      return next;
-    });
-    setTaskUpdate(`“${created.title}” is now live · ${createDeadline} · ${created.reward}`);
-    setModalMode(null);
-    window.setTimeout(() => document.getElementById("tasks")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+
+    setCreateError("");
+    setBoardStatus("loading");
+    setBoardNote("PUBLISHING TO THE SHARED BOARD…");
+    try {
+      const tones: Tone[] = ["orange", "mint", "cream", "green"];
+      const created = await mutateSharedTask({
+        action: "create",
+        label: createCategory,
+        title: createOutcome.trim(),
+        proof: createProof.trim(),
+        reward,
+        tone: tones[Math.floor(Math.random() * tones.length)],
+        requester: normalizeAddress(address),
+        deadline: createDeadline,
+      });
+      setTaskUpdate(`“${created.title}” is now live for every Ergon visitor · ${created.deadline} · ${created.reward}`);
+      setModalMode(null);
+      window.setTimeout(() => document.getElementById("tasks")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+    } catch (error) {
+      setBoardStatus("error");
+      setBoardNote(message(error));
+      setCreateError(message(error));
+    }
   }
 
   function openTask(task: LiveTask) {
@@ -178,12 +225,17 @@ export default function ErgonApp() {
     setModalMode("task");
   }
 
-  function submitProof(event: FormEvent<HTMLFormElement>) {
+  async function submitProof(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedTask) return;
     if (!connected) {
       setPayStatus("error");
       setPayNote("Connect Nimiq Pay first. Your connected wallet will be recorded as the contributor.");
+      return;
+    }
+    if (!selectedTask.posted) {
+      setPayStatus("error");
+      setPayNote("This is a task template. Post a shared task from it before submitting proof.");
       return;
     }
     if (!canSubmitProof(selectedTask, address)) {
@@ -198,18 +250,24 @@ export default function ErgonApp() {
       setPayNote("Add proof in words, paste a link, or attach a file.");
       return;
     }
-    updateTask(selectedTask.id, {
-      status: "proof-submitted",
-      submission: {
+
+    setPayStatus("loading");
+    setPayNote("Adding proof to the shared task record…");
+    try {
+      await mutateSharedTask({
+        action: "submit-proof",
+        id: selectedTask.id,
+        contributor: normalizeAddress(address),
         text: proofText.trim(),
         url: proofUrl.trim(),
         file: proofFileName,
-        contributor: normalizeAddress(address),
-        submittedAt: new Date().toISOString(),
-      },
-    });
-    setPayStatus("success");
-    setPayNote("Proof package added. Sign it to send it to the requester—this does not move any NIM.");
+      });
+      setPayStatus("success");
+      setPayNote("Proof package is shared. Sign it to send a wallet-authenticated receipt to the requester—this does not move any NIM.");
+    } catch (error) {
+      setPayStatus("error");
+      setPayNote(message(error));
+    }
   }
 
   async function signProof() {
@@ -238,8 +296,12 @@ export default function ErgonApp() {
         timestamp: selectedTask.submission.submittedAt,
       }));
       if (isProviderError(result)) throw new Error(result.error.message);
-      updateTask(selectedTask.id, {
-        submission: { ...selectedTask.submission, signature: result.signature },
+      await mutateSharedTask({
+        action: "sign-proof",
+        id: selectedTask.id,
+        contributor: normalizeAddress(address),
+        signature: result.signature,
+        publicKey: result.publicKey,
       });
       setPayStatus("success");
       setPayNote(`Proof signed • ${result.signature.slice(0, 14)}… Awaiting requester approval. You will not be asked to pay.`);
@@ -283,7 +345,12 @@ export default function ErgonApp() {
         validityStartHeight,
       });
       if (isProviderError(result)) throw new Error(result.error.message);
-      updateTask(selectedTask.id, { status: "paid", txHash: result });
+      await mutateSharedTask({
+        action: "mark-paid",
+        id: selectedTask.id,
+        requester: normalizeAddress(address),
+        transactionHash: result,
+      });
       setTxHash(result);
       setPayStatus("success");
       setPayNote("Payment broadcast by the requester. The contributor has been paid.");
@@ -316,14 +383,17 @@ export default function ErgonApp() {
         </div>
       </div>
       {taskUpdate && <div className="taskUpdate shell" role="status"><b>NEW TASK LIVE</b><span>{taskUpdate}</span><button onClick={() => setTaskUpdate("")} aria-label="Dismiss task update">×</button></div>}
+      <div className={`boardStatus shell ${boardStatus}`} role="status"><b>{boardStatus === "live" ? "● LIVE" : boardStatus === "loading" ? "◌ SYNCING" : "! OFFLINE"}</b><span>{boardNote}</span></div>
       <div className="taskStrip" id="tasks">
         {liveTasks.map((task) => <article className={`taskCard ${task.tone} ${task.posted ? "newTask" : ""}`} key={task.id}>
           <header><span>{task.posted ? "JUST POSTED" : task.label}</span><b>{task.reward}</b></header><h3>{task.title}</h3><div className="proof"><span>PROOF</span><b>{task.proof}</b></div>
-          <button onClick={() => openTask(task)}>{taskStatus(task) === "paid"
-            ? "PAID • VIEW RECEIPT ↗"
-            : taskStatus(task) === "proof-submitted"
-              ? (taskRole(task, address) === "requester" ? "REVIEW PROOF & PAY ↗" : "PROOF AWAITING REVIEW ↗")
-              : (taskRole(task, address) === "requester" ? "VIEW YOUR TASK ↗" : "DO TASK & ADD PROOF ↗")}</button>
+          <button onClick={() => task.posted ? openTask(task) : openCreateTask(task.label)}>{!task.posted
+            ? "USE AS A TASK TEMPLATE ↗"
+            : taskStatus(task) === "paid"
+              ? "PAID • VIEW RECEIPT ↗"
+              : taskStatus(task) === "proof-submitted"
+                ? (taskRole(task, address) === "requester" ? "REVIEW PROOF & PAY ↗" : "PROOF AWAITING REVIEW ↗")
+                : (taskRole(task, address) === "requester" ? "VIEW YOUR TASK ↗" : "DO TASK & ADD PROOF ↗")}</button>
         </article>)}
       </div>
       <div className="ticker"><span>✣ NO BIDDING</span><span>✣ PROOF-FIRST TASKS</span><span>✣ NATIVE NIM PAYMENTS</span><span>✣ SIGNED RECEIPTS</span><span>✣ QUICK TURNAROUND</span></div>
@@ -343,7 +413,7 @@ export default function ErgonApp() {
 
     <footer className="siteFooter"><div className="footerCard shell"><div><Brand/><h2>Came for the task,<br/>stayed for the proof.</h2><p>Built for the Nimiq Mini Apps Competition · Cycle I</p></div><div className="footerAction"><b>READY TO MAKE WORK VERIFIABLE?</b><button onClick={connect}>{connected ? `CONNECTED • ${short(address)}` : "CONNECT NIMIQ PAY"}<span>→</span></button><small>Wallet access and every payment require native user approval.</small></div></div></footer>
 
-    {modalMode === "create" && <div className="backdrop" onMouseDown={() => setModalMode(null)}><section className="modal createModal" role="dialog" aria-modal="true" aria-labelledby="create-title" onMouseDown={e => e.stopPropagation()}><button className="close" aria-label="Close" onClick={() => setModalMode(null)}>×</button><div className="kicker">NEW PROOF-FIRST TASK</div><h2 id="create-title">Post a fresh task.</h2><p>Define the finish line before anyone starts. Every field begins clean, every time.</p><form onSubmit={publishTask}><label>TASK OUTCOME<textarea value={createOutcome} onChange={e => setCreateOutcome(e.target.value)} placeholder="What exactly should be done?" maxLength={120} required/></label><div className="fieldPair"><label>TYPE<select value={createCategory} onChange={e => setCreateCategory(e.target.value)}><option>FROM MY PHONE</option><option>AROUND ME</option><option>AUTO-VERIFIED</option></select></label><label>DEADLINE<select value={createDeadline} onChange={e => setCreateDeadline(e.target.value)}><option>TODAY</option><option>WITHIN 24 HOURS</option><option>THIS WEEK</option></select></label></div><label>PROOF REQUIRED<textarea value={createProof} onChange={e => setCreateProof(e.target.value)} placeholder="Example: corrected PDF plus a short change summary" maxLength={100} required/></label><label>REWARD<div className="amount"><input value={createReward} onChange={e => setCreateReward(e.target.value)} inputMode="decimal" placeholder="0" required/><span>NIM</span></div></label>{createError && <div className="status error" role="alert">{createError}</div>}<button className="primary" type="submit">PUBLISH TO LIVE TASKS</button></form><small className="safety">Competition MVP: newly posted tasks update immediately and persist on this device.</small></section></div>}
+    {modalMode === "create" && <div className="backdrop" onMouseDown={() => setModalMode(null)}><section className="modal createModal" role="dialog" aria-modal="true" aria-labelledby="create-title" onMouseDown={e => e.stopPropagation()}><button className="close" aria-label="Close" onClick={() => setModalMode(null)}>×</button><div className="kicker">NEW PROOF-FIRST TASK</div><h2 id="create-title">Post a fresh task.</h2><p>Define the finish line before anyone starts. Every field begins clean, every time.</p><form onSubmit={publishTask}><label>TASK OUTCOME<textarea value={createOutcome} onChange={e => setCreateOutcome(e.target.value)} placeholder="What exactly should be done?" maxLength={120} required/></label><div className="fieldPair"><label>TYPE<select value={createCategory} onChange={e => setCreateCategory(e.target.value)}><option>FROM MY PHONE</option><option>AROUND ME</option><option>AUTO-VERIFIED</option></select></label><label>DEADLINE<select value={createDeadline} onChange={e => setCreateDeadline(e.target.value)}><option>TODAY</option><option>WITHIN 24 HOURS</option><option>THIS WEEK</option></select></label></div><label>PROOF REQUIRED<textarea value={createProof} onChange={e => setCreateProof(e.target.value)} placeholder="Example: corrected PDF plus a short change summary" maxLength={100} required/></label><label>REWARD<div className="amount"><input value={createReward} onChange={e => setCreateReward(e.target.value)} inputMode="decimal" placeholder="0" required/><span>NIM</span></div></label>{createError && <div className="status error" role="alert">{createError}</div>}<button className="primary" type="submit">PUBLISH TO LIVE TASKS</button></form><small className="safety">Shared competition board: newly posted tasks sync across browsers and devices within seconds.</small></section></div>}
 
     {modalMode === "task" && selectedTask && <div className="backdrop" onMouseDown={() => setModalMode(null)}>
       <section className="modal taskModal" role="dialog" aria-modal="true" aria-labelledby="task-title" onMouseDown={e => e.stopPropagation()}>
@@ -417,7 +487,7 @@ export default function ErgonApp() {
 
         {(payNote || walletNote) && <div className={"status " + payStatus} role="status">{payNote || walletNote}</div>}
         {txHash && selectedStatus !== "paid" && <div className="tx"><b>TRANSACTION HASH</b><code>{txHash}</code></div>}
-        <small className="safety">Role protection is wallet-based: contributor proof signatures never move funds, and payment is exposed only to the recorded requester wallet. Attachments remain local in this competition MVP.</small>
+        <small className="safety">Role protection is wallet-based: contributor proof signatures never move funds, and payment is exposed only to the recorded requester wallet. Proof text, links, signatures, and attachment names sync across devices; use a proof link when the file itself must be shared.</small>
       </section>
     </div>}
   </main>;

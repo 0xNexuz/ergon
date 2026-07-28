@@ -8,6 +8,7 @@ export type ProofPackage = {
   contributor: string;
   submittedAt: string;
   signature?: string;
+  publicKey?: string;
 };
 
 export type LiveTask = {
@@ -19,6 +20,8 @@ export type LiveTask = {
   tone: Tone;
   posted?: boolean;
   requester?: string;
+  deadline?: string;
+  createdAt?: string;
   status?: TaskStatus;
   submission?: ProofPackage;
   txHash?: string;
