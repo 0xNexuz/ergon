@@ -319,7 +319,11 @@ export default function ErgonApp() {
       <div className="taskStrip" id="tasks">
         {liveTasks.map((task) => <article className={`taskCard ${task.tone} ${task.posted ? "newTask" : ""}`} key={task.id}>
           <header><span>{task.posted ? "JUST POSTED" : task.label}</span><b>{task.reward}</b></header><h3>{task.title}</h3><div className="proof"><span>PROOF</span><b>{task.proof}</b></div>
-          <button onClick={() => openTask(task)}>ADD PROOF & SETTLE ↗</button>
+          <button onClick={() => openTask(task)}>{taskStatus(task) === "paid"
+            ? "PAID • VIEW RECEIPT ↗"
+            : taskStatus(task) === "proof-submitted"
+              ? (taskRole(task, address) === "requester" ? "REVIEW PROOF & PAY ↗" : "PROOF AWAITING REVIEW ↗")
+              : (taskRole(task, address) === "requester" ? "VIEW YOUR TASK ↗" : "DO TASK & ADD PROOF ↗")}</button>
         </article>)}
       </div>
       <div className="ticker"><span>✣ NO BIDDING</span><span>✣ PROOF-FIRST TASKS</span><span>✣ NATIVE NIM PAYMENTS</span><span>✣ SIGNED RECEIPTS</span><span>✣ QUICK TURNAROUND</span></div>
