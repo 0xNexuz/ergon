@@ -89,6 +89,23 @@ export default function ErgonApp() {
     return () => window.clearTimeout(restoreTimer);
   }, []);
 
+  function savePostedTasks(tasks: LiveTask[]) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.filter((task) => task.posted).slice(0, 12)));
+    } catch {
+      // The role-safe flow still works for this session if storage is unavailable.
+    }
+  }
+
+  function updateTask(taskId: string, changes: Partial<LiveTask>) {
+    setLiveTasks((current) => {
+      const next = current.map((task) => task.id === taskId ? { ...task, ...changes } : task);
+      savePostedTasks(next);
+      return next;
+    });
+    setSelectedTask((current) => current?.id === taskId ? { ...current, ...changes } : current);
+  }
+
   async function connect() {
     setWalletStatus("loading");
     setWalletNote("Waiting for Nimiq Pay approval…");
@@ -119,6 +136,10 @@ export default function ErgonApp() {
 
   function publishTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!connected) {
+      setCreateError("Connect Nimiq Pay first. The connected wallet becomes the requester and is the only wallet allowed to approve payment.");
+      return;
+    }
     const reward = Number(createReward);
     if (!createOutcome.trim() || !createProof.trim() || !Number.isFinite(reward) || reward <= 0) {
       setCreateError("Add an outcome, a proof requirement, and a reward greater than zero.");
@@ -133,14 +154,14 @@ export default function ErgonApp() {
       reward: `${reward} NIM`,
       tone: tones[Math.floor(Math.random() * tones.length)],
       posted: true,
+      requester: normalizeAddress(address),
+      status: "open",
     };
-    setLiveTasks((current) => [created, ...current]);
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]") as LiveTask[];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([created, ...(Array.isArray(saved) ? saved : [])].slice(0, 12)));
-    } catch {
-      // The live board still updates for this session if storage is unavailable.
-    }
+    setLiveTasks((current) => {
+      const next = [created, ...current];
+      savePostedTasks(next);
+      return next;
+    });
     setTaskUpdate(`“${created.title}” is now live · ${createDeadline} · ${created.reward}`);
     setModalMode(null);
     window.setTimeout(() => document.getElementById("tasks")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
@@ -148,15 +169,12 @@ export default function ErgonApp() {
 
   function openTask(task: LiveTask) {
     setSelectedTask(task);
-    setProofText("");
-    setProofUrl("");
-    setProofFileName("");
-    setProofSubmitted(false);
-    setRecipient("");
-    setAmount(task.reward.match(/[\d.]+/)?.[0] || "");
+    setProofText(task.submission?.text || "");
+    setProofUrl(task.submission?.url || "");
+    setProofFileName(task.submission?.file || "");
     setPayStatus("idle");
     setPayNote("");
-    setTxHash("");
+    setTxHash(task.txHash || "");
     setModalMode("task");
   }
 
