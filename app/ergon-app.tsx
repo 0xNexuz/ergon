@@ -3,9 +3,16 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { init, type ErrorResponse, type NimiqProvider } from "@nimiq/mini-app-sdk";
-
-type Tone = "orange" | "mint" | "cream" | "green";
-type LiveTask = { id: string; label: string; title: string; proof: string; reward: string; tone: Tone; posted?: boolean };
+import {
+  canSettleTask,
+  canSignProof,
+  canSubmitProof,
+  normalizeAddress,
+  taskRole,
+  taskStatus,
+  type LiveTask,
+  type Tone,
+} from "./task-state";
 
 const INITIAL_TASKS: LiveTask[] = [
   { id: "queue-check", label: "AROUND ME", title: "Check the queue at the main entrance", proof: "PHOTO + WAIT TIME", reward: "2 NIM", tone: "orange" },
@@ -33,6 +40,9 @@ function short(address: string) {
 function message(error: unknown) {
   return error instanceof Error ? error.message : "The wallet request could not be completed.";
 }
+function rewardAmount(task: LiveTask) {
+  return task.reward.match(/[\d.]+/)?.[0] || "";
+}
 function Brand() {
   return <span className="brand"><Image src="/ergon-mark.png" width={38} height={38} alt="" aria-hidden="true" />ERGON</span>;
 }
@@ -55,15 +65,16 @@ export default function ErgonApp() {
   const [proofText, setProofText] = useState("");
   const [proofUrl, setProofUrl] = useState("");
   const [proofFileName, setProofFileName] = useState("");
-  const [proofSubmitted, setProofSubmitted] = useState(false);
-  const [recipient, setRecipient] = useState("");
-  const [amount, setAmount] = useState("");
   const [payStatus, setPayStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [payNote, setPayNote] = useState("");
   const [txHash, setTxHash] = useState("");
   const [openFaq, setOpenFaq] = useState(0);
+  const amount = selectedTask ? rewardAmount(selectedTask) : "";
+  const recipient = selectedTask?.submission?.contributor || "";
   const luna = useMemo(() => Math.round((Number(amount) || 0) * 100_000), [amount]);
   const connected = walletStatus === "ready" && Boolean(address);
+  const selectedRole = selectedTask ? taskRole(selectedTask, address) : "disconnected";
+  const selectedStatus = selectedTask ? taskStatus(selectedTask) : "open";
 
   useEffect(() => {
     let restoreTimer = 0;
@@ -77,6 +88,23 @@ export default function ErgonApp() {
     }
     return () => window.clearTimeout(restoreTimer);
   }, []);
+
+  function savePostedTasks(tasks: LiveTask[]) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.filter((task) => task.posted).slice(0, 12)));
+    } catch {
+      // The role-safe flow still works for this session if storage is unavailable.
+    }
+  }
+
+  function updateTask(taskId: string, changes: Partial<LiveTask>) {
+    setLiveTasks((current) => {
+      const next = current.map((task) => task.id === taskId ? { ...task, ...changes } : task);
+      savePostedTasks(next);
+      return next;
+    });
+    setSelectedTask((current) => current?.id === taskId ? { ...current, ...changes } : current);
+  }
 
   async function connect() {
     setWalletStatus("loading");
@@ -108,6 +136,10 @@ export default function ErgonApp() {
 
   function publishTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!connected) {
+      setCreateError("Connect Nimiq Pay first. The connected wallet becomes the requester and is the only wallet allowed to approve payment.");
+      return;
+    }
     const reward = Number(createReward);
     if (!createOutcome.trim() || !createProof.trim() || !Number.isFinite(reward) || reward <= 0) {
       setCreateError("Add an outcome, a proof requirement, and a reward greater than zero.");
@@ -122,14 +154,14 @@ export default function ErgonApp() {
       reward: `${reward} NIM`,
       tone: tones[Math.floor(Math.random() * tones.length)],
       posted: true,
+      requester: normalizeAddress(address),
+      status: "open",
     };
-    setLiveTasks((current) => [created, ...current]);
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]") as LiveTask[];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([created, ...(Array.isArray(saved) ? saved : [])].slice(0, 12)));
-    } catch {
-      // The live board still updates for this session if storage is unavailable.
-    }
+    setLiveTasks((current) => {
+      const next = [created, ...current];
+      savePostedTasks(next);
+      return next;
+    });
     setTaskUpdate(`“${created.title}” is now live · ${createDeadline} · ${created.reward}`);
     setModalMode(null);
     window.setTimeout(() => document.getElementById("tasks")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
@@ -137,49 +169,80 @@ export default function ErgonApp() {
 
   function openTask(task: LiveTask) {
     setSelectedTask(task);
-    setProofText("");
-    setProofUrl("");
-    setProofFileName("");
-    setProofSubmitted(false);
-    setRecipient("");
-    setAmount(task.reward.match(/[\d.]+/)?.[0] || "");
+    setProofText(task.submission?.text || "");
+    setProofUrl(task.submission?.url || "");
+    setProofFileName(task.submission?.file || "");
     setPayStatus("idle");
     setPayNote("");
-    setTxHash("");
+    setTxHash(task.txHash || "");
     setModalMode("task");
   }
 
   function submitProof(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!selectedTask) return;
+    if (!connected) {
+      setPayStatus("error");
+      setPayNote("Connect Nimiq Pay first. Your connected wallet will be recorded as the contributor.");
+      return;
+    }
+    if (!canSubmitProof(selectedTask, address)) {
+      setPayStatus("error");
+      setPayNote(selectedRole === "requester"
+        ? "You posted this task. A different contributor wallet must submit the work."
+        : "This task already has a contributor submission.");
+      return;
+    }
     if (!proofText.trim() && !proofUrl.trim() && !proofFileName) {
       setPayStatus("error");
       setPayNote("Add proof in words, paste a link, or attach a file.");
       return;
     }
-    setProofSubmitted(true);
+    updateTask(selectedTask.id, {
+      status: "proof-submitted",
+      submission: {
+        text: proofText.trim(),
+        url: proofUrl.trim(),
+        file: proofFileName,
+        contributor: normalizeAddress(address),
+        submittedAt: new Date().toISOString(),
+      },
+    });
     setPayStatus("success");
-    setPayNote("Proof package added. It is ready for requester review and settlement.");
+    setPayNote("Proof package added. Sign it to send it to the requester—this does not move any NIM.");
   }
 
   async function signProof() {
     if (!provider) return connect();
-    if (!proofSubmitted || !selectedTask) {
+    if (!selectedTask || !canSignProof(selectedTask, address) || !selectedTask.submission) {
       setPayStatus("error");
-      setPayNote("Submit the proof package before signing it.");
+      setPayNote("Only the contributor wallet that submitted this proof can sign it.");
       return;
     }
     setPayStatus("loading");
-    setPayNote("Review the proof receipt in Nimiq Pay…");
+    setPayNote("Review the proof receipt in Nimiq Pay. This is a signature, not a payment…");
     try {
       const result = await provider.sign(JSON.stringify({
-        app: "Ergon", action: "approve-proof", taskId: selectedTask.id, task: selectedTask.title,
+        app: "Ergon",
+        action: "submit-proof",
+        taskId: selectedTask.id,
+        task: selectedTask.title,
         proofRequirement: selectedTask.proof,
-        proof: { text: proofText.trim(), url: proofUrl.trim(), file: proofFileName },
-        recipient, amountLuna: luna, timestamp: new Date().toISOString(),
+        proof: {
+          text: selectedTask.submission.text,
+          url: selectedTask.submission.url,
+          file: selectedTask.submission.file,
+        },
+        contributor: normalizeAddress(address),
+        reward: selectedTask.reward,
+        timestamp: selectedTask.submission.submittedAt,
       }));
       if (isProviderError(result)) throw new Error(result.error.message);
-      setPayStatus("idle");
-      setPayNote(`Proof signed • ${result.signature.slice(0, 14)}…`);
+      updateTask(selectedTask.id, {
+        submission: { ...selectedTask.submission, signature: result.signature },
+      });
+      setPayStatus("success");
+      setPayNote(`Proof signed • ${result.signature.slice(0, 14)}… Awaiting requester approval. You will not be asked to pay.`);
     } catch (error) {
       setPayStatus("error");
       setPayNote(message(error));
@@ -189,31 +252,41 @@ export default function ErgonApp() {
   async function sendPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setTxHash("");
-    if (!proofSubmitted || !selectedTask) {
-      setPayStatus("error"); setPayNote("Submit the required proof before payment."); return;
+    if (!selectedTask || !canSettleTask(selectedTask, address)) {
+      setPayStatus("error");
+      setPayNote("Only the wallet that posted this task can approve and pay its signed contributor.");
+      return;
     }
     if (!provider || !connected) {
-      setPayStatus("error"); setPayNote("Connect Nimiq Pay first."); return;
+      setPayStatus("error");
+      setPayNote("Connect the requester wallet in Nimiq Pay first.");
+      return;
     }
     if (!/^NQ[0-9A-Z ]{30,44}$/.test(recipient.trim().toUpperCase())) {
-      setPayStatus("error"); setPayNote("Enter a valid Nimiq address beginning with NQ."); return;
+      setPayStatus("error");
+      setPayNote("The contributor wallet address is invalid.");
+      return;
     }
     if (luna < 1) {
-      setPayStatus("error"); setPayNote("Enter an amount greater than zero."); return;
+      setPayStatus("error");
+      setPayNote("The task reward must be greater than zero.");
+      return;
     }
     setPayStatus("loading");
-    setPayNote("Confirm the NIM transaction in Nimiq Pay…");
+    setPayNote("Requester: confirm the NIM payment to the contributor in Nimiq Pay…");
     try {
       const validityStartHeight = await provider.getBlockNumber();
       const result = await provider.sendBasicTransactionWithData({
-        recipient: recipient.trim().toUpperCase(), value: luna,
+        recipient: recipient.trim().toUpperCase(),
+        value: luna,
         data: `ERGON:${selectedTask.id.slice(0, 18)}:${selectedTask.title.slice(0, 28)}`,
         validityStartHeight,
       });
       if (isProviderError(result)) throw new Error(result.error.message);
+      updateTask(selectedTask.id, { status: "paid", txHash: result });
       setTxHash(result);
       setPayStatus("success");
-      setPayNote("Payment broadcast. The work is officially done.");
+      setPayNote("Payment broadcast by the requester. The contributor has been paid.");
     } catch (error) {
       setPayStatus("error");
       setPayNote(message(error));
@@ -246,7 +319,11 @@ export default function ErgonApp() {
       <div className="taskStrip" id="tasks">
         {liveTasks.map((task) => <article className={`taskCard ${task.tone} ${task.posted ? "newTask" : ""}`} key={task.id}>
           <header><span>{task.posted ? "JUST POSTED" : task.label}</span><b>{task.reward}</b></header><h3>{task.title}</h3><div className="proof"><span>PROOF</span><b>{task.proof}</b></div>
-          <button onClick={() => openTask(task)}>ADD PROOF & SETTLE ↗</button>
+          <button onClick={() => openTask(task)}>{taskStatus(task) === "paid"
+            ? "PAID • VIEW RECEIPT ↗"
+            : taskStatus(task) === "proof-submitted"
+              ? (taskRole(task, address) === "requester" ? "REVIEW PROOF & PAY ↗" : "PROOF AWAITING REVIEW ↗")
+              : (taskRole(task, address) === "requester" ? "VIEW YOUR TASK ↗" : "DO TASK & ADD PROOF ↗")}</button>
         </article>)}
       </div>
       <div className="ticker"><span>✣ NO BIDDING</span><span>✣ PROOF-FIRST TASKS</span><span>✣ NATIVE NIM PAYMENTS</span><span>✣ SIGNED RECEIPTS</span><span>✣ QUICK TURNAROUND</span></div>
@@ -268,6 +345,80 @@ export default function ErgonApp() {
 
     {modalMode === "create" && <div className="backdrop" onMouseDown={() => setModalMode(null)}><section className="modal createModal" role="dialog" aria-modal="true" aria-labelledby="create-title" onMouseDown={e => e.stopPropagation()}><button className="close" aria-label="Close" onClick={() => setModalMode(null)}>×</button><div className="kicker">NEW PROOF-FIRST TASK</div><h2 id="create-title">Post a fresh task.</h2><p>Define the finish line before anyone starts. Every field begins clean, every time.</p><form onSubmit={publishTask}><label>TASK OUTCOME<textarea value={createOutcome} onChange={e => setCreateOutcome(e.target.value)} placeholder="What exactly should be done?" maxLength={120} required/></label><div className="fieldPair"><label>TYPE<select value={createCategory} onChange={e => setCreateCategory(e.target.value)}><option>FROM MY PHONE</option><option>AROUND ME</option><option>AUTO-VERIFIED</option></select></label><label>DEADLINE<select value={createDeadline} onChange={e => setCreateDeadline(e.target.value)}><option>TODAY</option><option>WITHIN 24 HOURS</option><option>THIS WEEK</option></select></label></div><label>PROOF REQUIRED<textarea value={createProof} onChange={e => setCreateProof(e.target.value)} placeholder="Example: corrected PDF plus a short change summary" maxLength={100} required/></label><label>REWARD<div className="amount"><input value={createReward} onChange={e => setCreateReward(e.target.value)} inputMode="decimal" placeholder="0" required/><span>NIM</span></div></label>{createError && <div className="status error" role="alert">{createError}</div>}<button className="primary" type="submit">PUBLISH TO LIVE TASKS</button></form><small className="safety">Competition MVP: newly posted tasks update immediately and persist on this device.</small></section></div>}
 
-    {modalMode === "task" && selectedTask && <div className="backdrop" onMouseDown={() => setModalMode(null)}><section className="modal taskModal" role="dialog" aria-modal="true" aria-labelledby="task-title" onMouseDown={e => e.stopPropagation()}><button className="close" aria-label="Close" onClick={() => setModalMode(null)}>×</button><div className="kicker">{selectedTask.label} · {selectedTask.reward}</div><h2 id="task-title">{selectedTask.title}</h2><div className="requiredProof"><span>REQUESTED PROOF</span><b>{selectedTask.proof}</b></div><form className="proofForm" onSubmit={submitProof}><label>PROOF NOTES<textarea value={proofText} onChange={e => setProofText(e.target.value)} placeholder="Describe what you completed and what the requester should check." maxLength={500}/></label><label>PROOF LINK <small>OPTIONAL</small><input type="url" value={proofUrl} onChange={e => setProofUrl(e.target.value)} placeholder="https://…"/></label><label className="fileField">PHOTO, PDF OR DOCUMENT <small>OPTIONAL</small><input type="file" accept="image/*,.pdf,.doc,.docx" capture="environment" onChange={e => setProofFileName(e.target.files?.[0]?.name || "")}/><span>{proofFileName || "CHOOSE A FILE OR TAKE A PHOTO"}</span></label><button type="submit">{proofSubmitted ? "PROOF PACKAGE UPDATED ✓" : "ADD PROOF PACKAGE"}</button></form>{proofSubmitted && <form className="settlementForm" onSubmit={sendPayment}><div className="settlementTitle"><span>2</span><div><b>APPROVE & SETTLE</b><small>Requester completes this section.</small></div></div><label>CONTRIBUTOR NIMIQ ADDRESS<input value={recipient} onChange={e => setRecipient(e.target.value)} placeholder="NQ…" autoCapitalize="characters" spellCheck={false} required/></label><label>REWARD<div className="amount"><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" required/><span>NIM</span></div></label><div className="luna">Network value: {luna.toLocaleString()} Luna <span>1 NIM = 100,000 Luna</span></div>{!connected ? <button type="button" className="primary" onClick={connect}>CONNECT NIMIQ PAY</button> : <div className="modalActions"><button type="button" onClick={signProof} disabled={payStatus === "loading"}>SIGN PROOF</button><button className="primary" type="submit" disabled={payStatus === "loading"}>{payStatus === "loading" ? "OPENING WALLET…" : "SEND NIM PAYMENT"}</button></div>}</form>}{(payNote || walletNote) && <div className={`status ${payStatus}`} role="status">{payNote || walletNote}</div>}{txHash && <div className="tx"><b>TRANSACTION HASH</b><code>{txHash}</code></div>}<small className="safety">Ergon never accesses private keys. Nimiq Pay mediates account, signature and transaction requests. Attachments remain local in this MVP; their filename is included in the signed receipt.</small></section></div>}
+    {modalMode === "task" && selectedTask && <div className="backdrop" onMouseDown={() => setModalMode(null)}>
+      <section className="modal taskModal" role="dialog" aria-modal="true" aria-labelledby="task-title" onMouseDown={e => e.stopPropagation()}>
+        <button className="close" aria-label="Close" onClick={() => setModalMode(null)}>×</button>
+        <div className="kicker">{selectedTask.label} · {selectedTask.reward} · {selectedStatus.replace("-", " ").toUpperCase()}</div>
+        <h2 id="task-title">{selectedTask.title}</h2>
+        <div className="requiredProof"><span>REQUESTED PROOF</span><b>{selectedTask.proof}</b></div>
+
+        {!connected && <div className="status idle" role="status">
+          <b>CONNECT TO CHOOSE YOUR ROLE</b><br/>
+          The posting wallet is the requester. A different wallet completes and signs the work.
+          <button type="button" className="primary" onClick={connect}>CONNECT NIMIQ PAY</button>
+        </div>}
+
+        {connected && <div className="status idle" role="status">
+          CONNECTED AS <b>{selectedRole.toUpperCase()}</b> · {short(address)}
+        </div>}
+
+        {connected && selectedStatus === "open" && selectedRole === "requester" && <div className="status success" role="status">
+          <b>YOUR TASK IS LIVE</b><br/>
+          A contributor must complete it with a different wallet. You will only see the payment action after that contributor submits and signs proof.
+        </div>}
+
+        {connected && canSubmitProof(selectedTask, address) && <form className="proofForm" onSubmit={submitProof}>
+          <div className="settlementTitle"><span>1</span><div><b>CONTRIBUTOR: ADD PROOF</b><small>Submitting and signing never sends NIM.</small></div></div>
+          <label>PROOF NOTES<textarea value={proofText} onChange={e => setProofText(e.target.value)} placeholder="Describe what you completed and what the requester should check." maxLength={500}/></label>
+          <label>PROOF LINK <small>OPTIONAL</small><input type="url" value={proofUrl} onChange={e => setProofUrl(e.target.value)} placeholder="https://…"/></label>
+          <label className="fileField">PHOTO, PDF OR DOCUMENT <small>OPTIONAL</small><input type="file" accept="image/*,.pdf,.doc,.docx" capture="environment" onChange={e => setProofFileName(e.target.files?.[0]?.name || "")}/><span>{proofFileName || "CHOOSE A FILE OR TAKE A PHOTO"}</span></label>
+          <button type="submit">ADD PROOF PACKAGE</button>
+        </form>}
+
+        {selectedTask.submission && selectedStatus !== "paid" && <div className="requiredProof">
+          <span>CONTRIBUTOR PROOF · {short(selectedTask.submission.contributor)}</span>
+          <b>{selectedTask.submission.text || selectedTask.submission.url || selectedTask.submission.file}</b>
+          {selectedTask.submission.url && <small>{selectedTask.submission.url}</small>}
+          {selectedTask.submission.file && <small>ATTACHMENT: {selectedTask.submission.file}</small>}
+        </div>}
+
+        {connected && canSignProof(selectedTask, address) && <div className="settlementForm">
+          <div className="settlementTitle"><span>2</span><div><b>CONTRIBUTOR: SIGN & SUBMIT</b><small>This creates a proof receipt. It is not a payment.</small></div></div>
+          <button type="button" className="primary" onClick={signProof} disabled={payStatus === "loading"}>{payStatus === "loading" ? "OPENING SIGNATURE…" : "SIGN PROOF — NO PAYMENT"}</button>
+        </div>}
+
+        {connected && selectedRole === "contributor" && Boolean(selectedTask.submission?.signature) && selectedStatus === "proof-submitted" && <div className="status success" role="status">
+          <b>PROOF SENT</b><br/>
+          Only the original requester can approve and pay. Your contributor wallet will not be charged.
+        </div>}
+
+        {connected && selectedRole === "requester" && selectedStatus === "proof-submitted" && !selectedTask.submission?.signature && <div className="status idle" role="status">
+          The contributor has added proof but has not signed the receipt yet. Payment stays unavailable.
+        </div>}
+
+        {connected && canSettleTask(selectedTask, address) && <form className="settlementForm" onSubmit={sendPayment}>
+          <div className="settlementTitle"><span>3</span><div><b>REQUESTER: APPROVE & PAY</b><small>Only the wallet that posted this task can complete this section.</small></div></div>
+          <label>CONTRIBUTOR NIMIQ ADDRESS<input value={recipient} readOnly aria-readonly="true"/></label>
+          <label>AGREED REWARD<div className="amount"><input value={amount} readOnly aria-readonly="true"/><span>NIM</span></div></label>
+          <div className="luna">Network value: {luna.toLocaleString()} Luna <span>1 NIM = 100,000 Luna</span></div>
+          <button className="primary" type="submit" disabled={payStatus === "loading"}>{payStatus === "loading" ? "OPENING REQUESTER WALLET…" : "APPROVE & PAY CONTRIBUTOR"}</button>
+        </form>}
+
+        {connected && selectedStatus === "proof-submitted" && selectedRole === "viewer" && <div className="status idle" role="status">
+          This task already has a contributor. Only that contributor can sign its proof, and only the original requester can pay.
+        </div>}
+
+        {selectedStatus === "paid" && <div className="settlementForm">
+          <div className="settlementTitle"><span>✓</span><div><b>TASK PAID</b><small>Requester-to-contributor settlement completed.</small></div></div>
+          <label>CONTRIBUTOR<input value={recipient} readOnly aria-readonly="true"/></label>
+          <label>REWARD<div className="amount"><input value={amount} readOnly aria-readonly="true"/><span>NIM</span></div></label>
+          {selectedTask.txHash && <div className="tx"><b>TRANSACTION HASH</b><code>{selectedTask.txHash}</code></div>}
+        </div>}
+
+        {(payNote || walletNote) && <div className={"status " + payStatus} role="status">{payNote || walletNote}</div>}
+        {txHash && selectedStatus !== "paid" && <div className="tx"><b>TRANSACTION HASH</b><code>{txHash}</code></div>}
+        <small className="safety">Role protection is wallet-based: contributor proof signatures never move funds, and payment is exposed only to the recorded requester wallet. Attachments remain local in this competition MVP.</small>
+      </section>
+    </div>}
   </main>;
 }

@@ -22,7 +22,7 @@ test("server-renders the Ergon Mini App", async () => {
   assert.match(html, /Post the outcome/);
   assert.match(html, /CONNECT NIMIQ/);
   assert.match(html, /ergon-mark\.png/);
-  assert.match(html, /ADD PROOF &amp; SETTLE/);
+  assert.match(html, /DO TASK &amp; ADD PROOF/);
   assert.match(html, /NATIVE NIM PAYMENTS/);
   assert.match(html, /Built for the Nimiq Mini Apps Competition/);
   assert.doesNotMatch(html, /codex-preview/);
@@ -37,7 +37,7 @@ test("ships competition and payment disclosures", async () => {
   assert.match(html, /Contract escrow belongs to the future EVM and USDT path/);
 });
 
-test("supports fresh task posting and multimodal proof", async () => {
+test("supports fresh task posting and role-separated proof", async () => {
   const source = await import("node:fs/promises").then(({ readFile }) =>
     readFile(new URL("../app/ergon-app.tsx", import.meta.url), "utf8"),
   );
@@ -47,4 +47,8 @@ test("supports fresh task posting and multimodal proof", async () => {
   assert.match(source, /PROOF NOTES/);
   assert.match(source, /type="file"/);
   assert.match(source, /proofUrl/);
+  assert.match(source, /canSettleTask\(selectedTask, address\)/);
+  assert.match(source, /Only the wallet that posted this task can approve and pay/);
+  assert.match(source, /SIGN PROOF — NO PAYMENT/);
+  assert.doesNotMatch(source, /ADD PROOF & SETTLE/);
 });
